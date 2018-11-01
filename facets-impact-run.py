@@ -26,31 +26,81 @@ def run_impact_facets():
     parser.add_argument('-s', '--seed', help = 'Set seed parameter', required = False, default = 100)
 
     args = parser.parse_args()
+    tumor_sample = args.tumor_sample
+    normal_sample = args.normal_sample
+    patient = tumor_sample[:9]
+    platform = tumor_sample[16:]
+
     facets_args = {
-        'lib-version': args.lib_version,
-        'tumor_sample': args.tumor_sample,
-        'min_nhet': args.min_nhet,
-        'seed': args.seed
+        'v': args.lib_version,
+        'c': str(args.cval),
+        'pc': str(args.purity_cval),
+        'm': str(args.min_nhet),
+        'pm': str(args.purity_min_nhet),
+        's': str(args.seed)
     }
 
-    patient = args.tumor_sample[:9]
-    platform = args.tumor_sample[16:]
+    # If full sample name is provided
+    if bool(re.match(r'P-[0-9]{7}-T[0-9]{2}-IM[0-9]{1}', tumor_sample)):
+        query = query_key(patient)
+        normal_sample, normal_bam, tumor_bam = pair_tumor_sample(tumor_sample, normal_sample, query)
+        run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args)
 
-    # Look for all patient BAM files
+    # If only partial sample name is provided, look for match
+    elif bool(re.match(r'P-[0-9]{7}-T[0-9]{2}', tumor_sample)):
+        query = query_key(patient)
+        name_match = re.match(tumor_sample+'-IM[0-9]{1}', query)
+        
+        if name_match is not None: 
+            print('Partial sample ID provided, found ' + name_match)
+            tumor_sample = name_match.group()
+            normal_sample, normal_bam, tumor_bam = pair_tumor_sample(tumor_sample, normal_sample, query)
+            run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args)
+
+        else:
+            print('Partial sample ID provided, found no match')
+        
+    # If only patient ID is input
+    elif bool(re.match(r'P-[0-9]{7}', tumor_sample)): 
+        print('Patient ID provided, will look for all tumor samples from patient, ok [y/n]?')
+        user_in = raw_input()
+        if bool(re.match(r'(y|Y|yes)', user_in)):
+            query = query_key(patient)
+            all_tumors = re.findall(r'P-[0-9]{7}-T[0-9]{2}-IM[0-9]{1}', query)
+
+            if len(all_tumors) > 0:
+                print('Found: ' + ', '.join(all_tumors))
+                for sample in all_tumors:
+                    normal_sample = None
+                    normal_sample, normal_bam, tumor_bam = pair_tumor_sample(sample, normal_sample, query)
+                    run_facets(normal_sample, normal_bam, sample, tumor_bam, facets_args)
+
+            else:
+                sys.exit('Found no tumor samples from patient ' + patient)
+
+        else:
+            sys.exit()    
+    else:
+        sys.exit('Invalid tumor sample name provided, try again.')
+ 
+def query_key(patient):
+    """Grep bam file key for patient ID"""
+
     query = subprocess.Popen(['grep', patient, key], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
     output, err = query.communicate()
 
-    # Check, unpack query
     if err != '':
         sys.exit(err)
+    elif output is '' or bool(re.match(patient, output)) is not True:
+        sys.exit(patient + ' not found in BAM file key')
+    else:
+        return output
 
-    if output == '' or args.tumor_sample not in output:
-        sys.exit(args.tumor_sample + 'not found in BAM file key.')
-
-    # output = [s for s in output.split('\n') if s != '']
-    # output = {sample:name for sample, name in (x.split(',')[:2] for x in output)}
+def pair_tumor_sample(tumor_sample, normal_sample, query_output):
+    """Match tumor sample to normal based on platform, pick highest numbered sample"""
+    
     sample_list = {}
-    for k in [s for s in output.split('\n') if s != '']:
+    for k in [s for s in query_output.split('\n') if s != '']:
         v = k.split(',')
         if bool(re.match(r'P-[0-9]{7}-N[0-9]{2}-IM[0-9]{1}', v[0])):
             type = 'normal'
@@ -60,26 +110,40 @@ def run_impact_facets():
         number = re.search(r'(?<=[A-Z]{1}0)[0-9]{1}', v[0]).group()
         sample_list[v[0]] = {'name': v[1], 'type': type, 'platform': platform, 'number': number}
 
-    tumor_bam = ''.join([bam_dir, sample_list[args.tumor_sample].get('name'), '.bam'])
+    tumor_bam = ''.join([bam_dir, sample_list[tumor_sample].get('name'), '.bam'])
 
-    if args.normal_sample is not None:
-        if args.normal_sample in sample_list:
-            normal_bam = sample_list['P-0029357-N01-IM6'].get('name')
+    if normal_sample is not None:
+        if normal_sample in sample_list:
+            normal_bam = sample_list[normal_sample].get('name')
         else:
-            sys.exit(args.normal_sample + 'not found in BAM file key.')
+            sys.exit(normal_sample + 'not found in BAM file key')
     else:
-        tumor_platform = sample_list[args.tumor_sample].get('platform')
+        tumor_platform = sample_list[tumor_sample].get('platform')
         normals = [x for x in sample_list.keys() if sample_list[x].get('type') == 'normal' and sample_list[x].get('platform') == tumor_platform]
         if len(normals) == 0:
-            sys.exit('Could not find an appropriate normal in BAM file key.')
+            sys.exit('Could not find an appropriate normal in BAM file key')
         normal_numbers = map(int, [(v.get('number')) for (k, v) in sample_list.items() if k in normals])
         best_normal = normals[normal_numbers.index(max(normal_numbers))]
         normal_bam = ''.join([bam_dir, sample_list[best_normal].get('name'), '.bam'])
 
-    facets_cmd = ' '.join(['cmoflow_facets', '--lib-version', args.lib_version, '--normal-bam', normal_bam, '--tumor-bam', tumor_bam, '--normal-name', best_normal, '--tumor-sample', args.tumor_sample, '--cval', str(args.cval), '--purity_cval', str(args.purity_cval), '--min_nhet', str(args.min_nhet), '--purity_min_nhet', str(args.purity_min_nhet)])
+    return best_normal, normal_bam, tumor_bam
 
-    print 'Running Facets:\nTumor: ' + args.tumor_sample + '\nNormal: ', best_normal
+def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
+    """Construct and run cmoflow_facets command"""
 
+    facets_cmd = ' '.join(
+        ['cmoflow_facets',
+        '--lib-version', facets_args['v'],
+        '--normal-bam', normal_bam,
+        '--tumor-bam', tumor_bam,
+        '--normal-name', normal_sample,
+        '--tumor-name', tumor_sample,
+        '--cval', facets_args['c'],
+        '--purity_cval', facets_args['pc'],
+        '--min_nhet', facets_args['m'],
+        '--purity_min_nhet', facets_args['pm']])
+
+    print 'Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ', normal_sample
     subprocess.call(facets_cmd, shell = True)
 
 if __name__ == '__main__':
