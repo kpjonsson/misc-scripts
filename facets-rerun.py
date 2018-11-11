@@ -21,7 +21,7 @@ def rerun_facets():
         required = False, default = 15)
     parser.add_argument('-d', '--diplogr', help = 'Diploid log-ratio', required = False)
     parser.add_argument('-D', '--directory', help = 'Output directory', required = False)
-    parser.add_argument('-t', '--tag', help = 'Output file tags', required = False)
+    parser.add_argument('-t', '--tag', help = 'Output file tag', required = False)
     parser.add_argument('-s', '--seed', help = 'Set seed parameter', required = False, default = 100)
 
     args = parser.parse_args()
@@ -33,7 +33,7 @@ def rerun_facets():
     }
 
     if args.diplogr is not None:
-        facets_args['diplogr'] = args.diplogr
+        facets_args['dipLogR'] = args.diplogr
 
     if args.cval is not None:
         facets_args['cval'] = args.purity_cval
@@ -44,39 +44,38 @@ def rerun_facets():
     if args.purity_min_nhet is not None:
         facets_args['purity_min_nhet'] = args.purity_min_nhet
 
-    if args.tag is None:
-        tag = 'facets_' + args.lib_version + 's' + str(args.seed) + 'm' + str(args.min_nhet)
-        if 'purity_min_nhet' in facets_args: 
-            tag += 'pm' + str(facets_args['purity_min_nhet'])
-        if 'cval' in facets_args: 
-            tag += 'c' + str(facets_args['cval'])
-        if 'purity_cval' in facets_args: 
-            tag += 'pc' + str(facets_args['purity_cval'])
-        if 'diplogr' in facets_args: 
-            tag += '_diplogr' + str(facets_args['diplogr'])
-        facets_args['TAG'] = tag
-    else:
-        facets_args['TAG'] = args.tag
-
-    print(facets_args['TAG'])
-
     if args.directory is None:
+        directory = 'facets_' + args.lib_version + 's' + str(args.seed) + 'm' + str(args.min_nhet)
+        if 'purity_min_nhet' in facets_args: 
+            directory += 'pm' + str(facets_args['purity_min_nhet'])
+        if 'cval' in facets_args: 
+            directory += 'c' + str(facets_args['cval'])
+        if 'purity_cval' in facets_args: 
+            directory += 'pc' + str(facets_args['purity_cval'])
+        if 'diplogr' in facets_args: 
+            directory += '_diplogr' + str(facets_args['diplogr'])
+        facets_args['directory'] = directory
+    else:
+        facets_args['directory'] = args.directory
+
+    if os.path.exists(facets_args['directory']):
+        sys.exit('Output directory exists, speciffy a diffferent one.')
+    else:
+        print(facets_args['directory'])
+        subprocess.call('mkdir -p ' + facets_args['directory'], shell = True)
+
+    if args.tag is None:
         tumor = re.search(r'P-[0-9]{7}-T0[0-9]{1}-IM[0-9]{1}', args.counts_file)
         normal = re.search(r'P-[0-9]{7}-N0[0-9]{1}-IM[0-9]{1}', args.counts_file)
         if bool(tumor):
             d = tumor.group()
             if bool(normal):
                 d += '_' + normal.group()
-            facets_args['directory'] = d
+            facets_args['TAG'] = d
         else:
-            facets_args['directory'] = 'facets_rerun'
+            facets_args['TAG'] = 'facets_rerun'
     else:
-        facets_args['directory'] = args.directory
-    if os.path.exists(facets_args['directory']):
-        sys.exit('Output directory exists, speciffy a diffferent one.')
-    else:
-        print(facets_args['directory'])
-        subprocess.call('mkdir -p ' + facets_args['directory'], shell = True)
+        facets_args['TAG'] = args.tag
 
     call = 'cmo_facets --lib-version ' + facets_args['lib-version'] + ' doFacets'
     for key, value in facets_args.iteritems():

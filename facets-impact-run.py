@@ -133,7 +133,7 @@ def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
 
     facets_cmd = ' '.join(
         ['cmoflow_facets',
-        '--lib-version', facets_args['v'],
+        '--R_lib', facets_args['v'],
         '--normal-bam', normal_bam,
         '--tumor-bam', tumor_bam,
         '--normal-name', normal_sample,
