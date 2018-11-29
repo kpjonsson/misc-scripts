@@ -43,6 +43,8 @@ def run_impact_facets():
     # If full sample name is provided
     if bool(re.match(r'P-[0-9]{7}-T[0-9]{2}-IM[0-9]{1}', tumor_sample)):
         query = query_key(patient)
+        if tumor_sample not in query:
+            sys.exit(tumor_sample + ' not found in BAM file key')
         normal_sample, normal_bam, tumor_bam = pair_tumor_sample(tumor_sample, normal_sample, query)
         run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args)
 
@@ -143,7 +145,7 @@ def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
         '--min_nhet', facets_args['m'],
         '--purity_min_nhet', facets_args['pm']])
 
-    print 'Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ', normal_sample
+    print 'Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ', normal_sample 
     subprocess.call(facets_cmd, shell = True)
 
 if __name__ == '__main__':

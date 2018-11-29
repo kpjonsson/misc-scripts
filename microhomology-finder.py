@@ -71,6 +71,6 @@ with open(args.outFile, 'w') as output:
 		homLength = len(homology)
 
 		# Parse and print output, but only if homology > 1 bp
-		if homLength > 1:
-			outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (sample, chrom, start, end, variantType, refAllele, altAllele, fiveFlank, threeFlank, homology, homLength)
-			output.write(outline)
+		#if homLength > 1:
+		outline = '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' % (sample, chrom, start, end, variantType, refAllele, altAllele, fiveFlank, threeFlank, homology, homLength)
+		output.write(outline)
