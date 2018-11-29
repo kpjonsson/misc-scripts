@@ -1,109 +1,129 @@
-library(ggplot2)
-library(plyr)
-library(dplyr)
-library(Cairo)
-library(gridExtra)
+suppressPackageStartupMessages({
+    library(plyr)
+    library(dplyr)
+    library(purrr)
+    library(stringr)
+    library(ggplot2)
+    library(Cairo)
+    library(gridExtra)
+})
 
-#############################
-### HRD scoring functions ###
-#############################
-### Implementations based on PMID: 26015868
+# Implementation of HRD scores based on PMID: 26015868
 
-### Calculate statistics on the copy-number changes
-calc_cn_stats = function(facets_rdata, genome = 'hg19', algorithm = 'cncf', sample_name = NULL) {
-    
-    ### Load data   
+# Copy-number based stats -----------------------------------------------------------------------------------------
+calc_cn_stats = function(facets_rdata,
+                         genome = 'hg19',
+                         algorithm = 'em',
+                         sample_name = NULL) {
+
+    # Load data   
     load(facets_rdata)
     if (is.null(sample_name)) sample_name = out$IGV$ID[1]
 
-    ### Centromere locations
-    chrom_info = switch(genome, hg19 = get_chrom_info('hg19'), hg18 = get_chrom_info('hg18'))
+    # Centromere locations
+    chrom_info = switch(genome,
+                        hg19 = get_chrom_info('hg19'),
+                        hg18 = get_chrom_info('hg18'))
 
-    ### Choose CNCF or EM algorithm
-    if (algorithm == 'em') {
-        fit$cncf$tcn = fit$cncf$tcn.em
-        fit$cncf$lcn = fit$cncf$lcn.em
-    }
-    seg = fit$cncf
-    if (!is.null(fit$start)) {
-        seg$start = fit$start
-        seg$end = fit$end
-    } else {
-        seg$start = out$IGV$loc.start
-        seg$end = out$IGV$loc.end
-    }
-    seg$length = seg$end-seg$start
-    seg$mcn = seg$tcn - seg$lcn
-    seg[which(seg$tcn == 1),'mcn'] = 1 # correct mcn, lcn for cases of tcn = 1 // sometimes FACETS set lcn = NA when tcn = 1, when it clearly has to be 0
-    seg[which(seg$tcn == 1),'lcn'] = 0
-	seg[which(seg$tcn == 0),'lcn'] = 0
+    seg = get_seg(fit, algorithm)
     
-    ### Create chrom_info for sample
-    sample_chrom_info = ldply(unique(seg$chrom), function(x) {
-        chr = x
-        centromere = chrom_info[which(chrom_info$chr == x), 'centromere']
-        chrstart = min(seg[which(seg$chrom == x), 'start'])
-        chrend = max(seg[which(seg$chrom == x), 'end'])
-        size = chrend-chrstart
-        plength = centromere - chrstart
-        qlength = chrend - centromere
-        c(chr = chr, centromere = centromere, chrstart = chrstart, chrend = chrend, size = size, plength = plength, qlength = qlength)
-    })
+    # Create chrom_info for sample
+    sample_chrom_info = get_sample_genome(seg, chrom_info)
 
-    ### Calculated length of interrogated genome
+    # Calculated length of interrogated genome
     interrogated_genome = sum(sample_chrom_info$size)
-    #print(interrogated_genome)
+    autosomal_genome = sum(sample_chrom_info$size[sample_chrom_info$chr %in% 1:22])
 
-    ### Check for whole-genome duplication // Penson's logic
-    wgd_treshold = 0.6 # treshold 
-    frac_elevated_mcn = sum(as.numeric(seg[which(seg$tcn > 2), 'length']))/interrogated_genome
-    WGD = ifelse(frac_elevated_mcn > wgd_treshold, TRUE, FALSE)
-
-    ### Calculate fraction of genome altered 
-    if (!WGD) { 
-		diploid_length = sum(as.numeric(filter(seg, tcn == 2, (lcn == 1 | is.na(lcn)))[['length']]))
-    } else if (WGD) {
-		diploid_length = sum(as.numeric(filter(seg, tcn == 4, (lcn == 2 | is.na(lcn)))[['length']]))
+    # Check for whole-genome duplication // PMID 30013179
+    wgd_treshold = 0.5 # treshold 
+    frac_elevated_mcn = sum(seg$length[which(seg$mcn >= 2 & seg$chrom %in% 1:22)])/autosomal_genome
+    wgd = frac_elevated_mcn > wgd_treshold
+    
+    # Calculate fraction of genome altered
+    sample_ploidy = ifelse(wgd, round(fit$ploidy), 2)
+    if (wgd) {
+        diploid_length = sum(seg$length[which(seg$tcn == sample_ploidy & seg$lcn == 1)])
+    } else if (!wgd) {
+        diploid_length = sum(seg$length[which(seg$mcn == sample_ploidy & seg$lcn >= 1)]) 
     }
-    frac_altered = (interrogated_genome-diploid_length)/interrogated_genome 
+    frac_altered = (interrogated_genome-diploid_length)/interrogated_genome
+    
+    # Altered arms, slightly adjusted to PMID 29622463
+    seg = left_join(seg, sample_chrom_info[, c('chr', 'centromere')], by = c('chrom' = 'chr'))
+    altered_arms = sapply(unique(seg$chrom), function(x) {
+        seg_p = seg[which(seg$chrom == x & seg$start < seg$centromere),]
+        seg_p$end = ifelse(seg_p$end > seg_p$centromere, seg_p$centromere, seg_p$end)
+        seg_p$length = seg_p$end - seg_p$start
+        seg_q = seg[which(seg$chrom == x & seg$end > seg$centromere),]
+        seg_q$start = ifelse(seg_q$start < seg_q$centromere, seg_q$centromere, seg_q$start)
+        seg_q$length = seg_q$end - seg_q$start
+        
+        if (wgd) {
+            seg_p_unaltered = sum(seg_p$length[which(seg_p$tcn == sample_ploidy & seg_p$lcn == 1)])
+            seg_q_unaltered = sum(seg_q$length[which(seg_q$tcn == sample_ploidy & seg_q$lcn == 1)])
+        } else if (!wgd) {
+            seg_p_unaltered = sum(seg_p$length[which(seg_p$mcn == sample_ploidy & seg_p$lcn >= 1)]) 
+            seg_q_unaltered = sum(seg_q$length[which(seg_q$mcn == sample_ploidy & seg_q$lcn >= 1)]) 
+        }
+        paste0(paste0(x, c('p', 'q'))[c((sample_chrom_info$plength[sample_chrom_info$chr == x]-seg_p_unaltered)/sample_chrom_info$plength[sample_chrom_info$chr == x]>.8,
+                                        (sample_chrom_info$qlength[sample_chrom_info$chr == x]-seg_q_unaltered)/sample_chrom_info$qlength[sample_chrom_info$chr == x]>.8) %>% 
+                                          map_lgl(~ifelse(is.na(.), FALSE, .))], collapse = ',')
+    }) %>% strsplit(., ',') %>% 
+        unlist %>% 
+        discard(. %in% c('', '13p', '14p', '15p', '21p', '22p'))
 
-    ### Calculate number of CN events and their length
-    if (!WGD) {
-        cn_segments = rbind(seg[which(seg$tcn != 2),], # any non-diploid
-            seg[which(seg$tcn == 2 & seg$lcn == 0),]) # unless CN-LOH
-        cn_segments_no = nrow(cn_segments)
-        cn_segments_mean_length = mean(cn_segments$end - cn_segments$start)
-        cn_segments_median_length = median(cn_segments$end - cn_segments$start)
-    } else if (WGD) {
-        cn_segments = rbind(seg[which(seg$tcn != 4),], # any non-diploid
-            seg[which(seg$tcn == 4 & seg$lcn != 2),]) # unless CN-LOH
-        cn_segments_no = nrow(cn_segments)
-        cn_segments_mean_length = mean(cn_segments$end - cn_segments$start)
-        cn_segments_median_length = median(cn_segments$end - cn_segments$start)
-    }
+    # Weigthed fraction copy-number altered
+    frac_altered_w = select(sample_chrom_info, chr, p = plength, q = qlength) %>% 
+        gather(arm, length, -chr) %>% 
+        filter(!paste0(chr, arm) %in% c('13p', '14p', '15p', '21p', '22p')) %>%
+        summarize(sum(length[paste0(chr, arm) %in% altered_arms])/sum(length)) %>%
+        as.numeric
+    
+    # # Calculate number of CN events and their length
+    # if (wgd) {
+    #     cn_segments = rbind(seg[which(seg$tcn != 2),], # any non-diploid
+    #         seg[which(seg$tcn == 2 & seg$lcn == 0),]) # unless CN-LOH
+    #     cn_segments_no = nrow(cn_segments)
+    #     cn_segments_mean_length = mean(cn_segments$end - cn_segments$start)
+    #     cn_segments_median_length = median(cn_segments$end - cn_segments$start)
+    # } else if (wgd) {
+    #     cn_segments = rbind(seg[which(seg$tcn != 4),], # any non-diploid
+    #         seg[which(seg$tcn == 4 & seg$lcn != 2),]) # unless CN-LOH
+    #     cn_segments_no = nrow(cn_segments)
+    #     cn_segments_mean_length = mean(cn_segments$end - cn_segments$start)
+    #     cn_segments_median_length = median(cn_segments$end - cn_segments$start)
+    # }
 
-    cn_out = data.frame(Sample = sample_name,
-        WGD = WGD,
-        CNA_Fraction = frac_altered,
-        CN_Seg_No = cn_segments_no,
-        CN_Seg_Mean_Length = cn_segments_mean_length,
-        CN_Seg_Median_Length = cn_segments_median_length)
-
-    return(cn_out)
+    data.frame(
+        sample = sample_name,
+        wgd = wgd,
+        fcna = frac_altered,
+        weigthed_fcna = frac_altered_w,
+        aneuploidy_score = length(altered_arms),
+        altered_arms = paste0(altered_arms, collapse = ',') 
+    )
 }
 
-### Calculate telomeric allelic imbalance
-### PMID: 22576213
-calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 250, return_loc = FALSE, return_plot = FALSE, algorithm = 'cncf', sample_name = NULL) {
+# Telomeric allelic imbalance - NtAI ------------------------------------------------------------------------------
+# PMID: 22576213
+
+calc_ntai = function(facets_rdata,
+                     genome = 'hg19',
+                     min_size = 0,
+                     min_probes = 250,
+                     return_loc = FALSE,
+                     return_plot = FALSE,
+                     algorithm = 'em',
+                     sample_name = NULL) {
     
-    ### Load data   
+    # Load data   
     load(facets_rdata)
     if (is.null(sample_name)) sample_name = out$IGV$ID[1]
     
-    ### Centromere locations
+    # Centromere locations
     chrom_info = switch(genome, hg19 = get_chrom_info('hg19'), hg18 = get_chrom_info('hg18'))
     
-    ### Choose CNCF or EM algorithm
+    # Choose CNCF or EM algorithm
     if (algorithm == 'em') {
         fit$cncf$tcn = fit$cncf$tcn.em
         fit$cncf$lcn = fit$cncf$lcn.em
@@ -120,13 +140,13 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
     seg[which(seg$tcn == 1),'mcn'] = 1 # correct mcn, lcn for cases of tcn = 1 // sometimes FACETS set lcn = NA when tcn = 1, when it clearly has to be 0
     seg[which(seg$tcn == 1),'lcn'] = 0
     
-    ### Filter segments that do not pass filters
+    # Filter segments that do not pass filters
     seg = seg[which(seg$num.mark >= min_probes),]
     seg = seg[which(seg$end - seg$start >= min_size),]
 
-    ### Should be TRUE
+    # Should be TRUE
     
-    ### Shrink segments with identical copy number
+    # Shrink segments with identical copy number
     new_seg = data.frame()
     for(i in unique(seg$chrom)){
         chrom_seg = seg[which(seg$chrom == i),]
@@ -135,7 +155,7 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
     }
     seg = new_seg
     
-    ### Add a column to call AI
+    # Add a column to call AI
     # Codes for telomeric/interstitial/whole chromosome:
     # 0 = no AI
     # 1 = telomeric
@@ -145,14 +165,14 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
     seg$chrom_ploidy = NA
     sample_ploidy = fit$ploidy # sample ploidy from FACETS
     
-    ### Loop through chromosomes
+    # Loop through chromosomes
     for(i in unique(seg$chrom)){
         
-        ### Subset on chromosome, proceed to next if no segment
+        # Subset on chromosome, proceed to next if no segment
         chrom_seg = seg[which(seg$chrom == i),]
         if(nrow(chrom_seg) == 0){ next }
         
-        ### Determine major ploidy for chromosome
+        # Determine major ploidy for chromosome
         ploidy = vector()
         for(k in unique(seg$tcn)){
             tmp = chrom_seg[which(chrom_seg$tcn == k),]
@@ -170,11 +190,11 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
             chrom_seg$AI[which(is.na(chrom_seg$AI))] = 0 # adjust NAs
         }
         
-        ### Put back into original seg
+        # Put back into original seg
         seg$chrom_ploidy[which(seg$chrom == i)] = ploidy
         seg$AI[which(seg$chrom == i)] = chrom_seg$AI
 
-        ### Check relative position to centromere
+        # Check relative position to centromere
         if(chrom_seg$AI[1] == 2 & nrow(chrom_seg) != 1 & chrom_seg$end[1] < (chrom_info$centromere[i])){
             seg$AI[which(seg$chrom == i)][1] = 1 # if the first segment of chromosome is AI and does not extend to centromere --> telomeric AI
         }
@@ -186,7 +206,7 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
         }
     }
     
-    ### Prepare return 
+    # Prepare return 
     seg_loh = seg[which(seg$lcn == 0),]
     ntai_out = data.frame(Sample = sample_name,
         NtAI = nrow(seg[which(seg$AI == 1),]), # telomeric AI
@@ -211,18 +231,21 @@ calc_ntai = function(facets_rdata, genome = 'hg19', min_size = 0, min_probes = 2
         print(paste0('Plotting function not implemented'))
         return(ntai_out)
     }
-    
 }
 
-### Calculate HRD-LOH score
-### PMID: 23047548
-calc_hrdloh = function(facets_rdata, algorithm = 'cncf', return_loc = FALSE, return_plot = FALSE, sample_name = NULL) {
+# Calculate HRD-LOH score -----------------------------------------------------------------------------------------
+# PMID: 23047548
+calc_hrdloh = function(facets_rdata,
+                       algorithm = 'em',
+                       return_loc = FALSE,
+                       return_plot = FALSE,
+                       sample_name = NULL) {
 
-    ### Load data   
+    # Load data   
     load(facets_rdata)
     if (is.null(sample_name)) sample_name = out$IGV$ID[1]
       
-    ### Choose CNCF or EM algorithm
+    # Choose CNCF or EM algorithm
     if (algorithm == 'em') {
         fit$cncf$tcn = fit$cncf$tcn.em
         fit$cncf$lcn = fit$cncf$lcn.em
@@ -246,13 +269,13 @@ calc_hrdloh = function(facets_rdata, algorithm = 'cncf', return_loc = FALSE, ret
         }
     }
     
-    ### Check for LOH
+    # Check for LOH
     seg_loh = seg[!is.na(seg$lcn),] # remove segments with lcn = NA
     seg_loh = seg_loh[which(seg_loh$lcn == 0 & seg_loh$mcn != 0),]
     seg_loh = seg_loh[which(seg_loh$end - seg_loh$start > 15e6),] # check if segment is long enough
-    seg_loh = seg_loh[which(seg_loh$chrom %nin% chr_del),] # remove if whole chromosome lost
+    seg_loh = seg_loh[!which(seg_loh$chrom %in% chr_del),] # remove if whole chromosome lost
 
-    ### Mark HRD-LOH segments in original seg
+    # Mark HRD-LOH segments in original seg
     seg$HRD_LOH = NA
     for (k in 1:nrow(seg_loh)) {
         ii = which(seg$chrom == seg_loh$chrom[k] & seg$start == seg_loh$start[k] & seg$end == seg_loh$end[k])
@@ -273,27 +296,28 @@ calc_hrdloh = function(facets_rdata, algorithm = 'cncf', return_loc = FALSE, ret
     }
 }
 
-### Calculate large-scale state transitions (LST)
-### PMID: 22933060
+
+# Large-scale state transitions - LST -----------------------------------------------------------------------------
+# PMID: 22933060
 calc_lst = function(
     facets_rdata,
     genome = 'hg19',
     min_probes = 50,
     lst_length = 10e6,
-    algorithm = 'cncf',
+    algorithm = 'em',
     return_loc = FALSE,
     return_plot = FALSE,
     pdf = FALSE,
     sample_name = NULL)
 {
-	### Load data	
+	# Load data	
 	load(facets_rdata)
 	if (is.null(sample_name)) sample_name = out$IGV$ID[1]
 
-	### Centromere locations
+	# Centromere locations
 	chrom_info = switch(genome, hg19 = get_chrom_info('hg19'), hg18 = get_chrom_info('hg18'))
 
-	### Choose CNCF or EM algorithm
+	# Choose CNCF or EM algorithm
     if (algorithm == 'em') {
         fit$cncf$tcn = fit$cncf$tcn.em
         fit$cncf$lcn = fit$cncf$lcn.em
@@ -310,7 +334,7 @@ calc_lst = function(
     seg[which(seg$tcn == 1),'mcn'] = 1 # correct mcn, lcn for cases of tcn = 1 // sometimes FACETS set lcn = NA when tcn = 1, when it clearly has to be 0
     seg[which(seg$tcn == 1),'lcn'] = 0
 
-	### Return loci of LSTs?
+	# Return loci of LSTs?
 	if (return_loc | return_plot) {
 		lst_seg = matrix(0,0,20)
         colnames(lst_seg) = c(colnames(seg), 'LST_breakpoint', 'chr_arm')
@@ -383,7 +407,7 @@ calc_lst = function(
         }
 	}
 
-    ### Return values
+    # Return values
     lst_out = data.frame(Sample = sample_name, LST = sum(lst))
    
     if (!return_loc & !return_plot) { return(lst_out) }
@@ -405,24 +429,26 @@ calc_lst = function(
     }
 }
 
+
+# Genome-wide LOH  ------------------------------------------------------------------------------------------------
 calc_gloh = function(
     facets_rdata,
     genome = 'hg19',
-    algorithm = 'cncf',
+    algorithm = 'em',
     return_loc = FALSE,
     return_plot = FALSE,
     pdf = FALSE,
     sample_name = NULL)
 {
    
-    ### Load data   
+    # Load data   
     load(facets_rdata)
     if (is.null(sample_name)) sample_name = out$IGV$ID[1]
 
-    ### Centromere locations
+    # Centromere locations
     chrom_info = switch(genome, hg19 = get_chrom_info('hg19'), hg18 = get_chrom_info('hg18'))
 
-    ### Choose CNCF or EM algorithm
+    # Choose CNCF or EM algorithm
     if (algorithm == 'em') {
         fit$cncf$tcn = fit$cncf$tcn.em
         fit$cncf$lcn = fit$cncf$lcn.em
@@ -441,17 +467,17 @@ calc_gloh = function(
     seg$length = seg$end - seg$start # calculate length of copy-number segments
     seg = subset(seg, chrom < 23) # gLOH only calculated for autosomes
 
-    ### Add arm length to chromosome info
+    # Add arm length to chromosome info
     chrom_info$plength = chrom_info$centromere
     chrom_info$qlength = chrom_info$size - chrom_info$centromere
 
-    ### Track cumulative lengths
+    # Track cumulative lengths
     loh_length = 0 # regions of loh
     exclude_length = 0 # regions of loh that either span 90% of whole chromosome or chromosome arm
     sample_loh_centromere = 0 # loh regions spanning centromere, but less than 90% of whole chromosome and either arm
     seg$gloh = FALSE # mark regions for plotting
 
-    ### Create chrom_info for sample
+    # Create chrom_info for sample
     sample_chrom_info = ldply(unique(seg$chrom), function(x) {
         chr = x
         centromere = chrom_info[which(chrom_info$chr == x), 'centromere']
@@ -463,24 +489,25 @@ calc_gloh = function(
         c(chr = chr, centromere = centromere, chrstart = chrstart, chrend = chrend, size = size, plength = plength, qlength = qlength)
     })
     
-    ### Calculated length of interrogated genome
+    # Calculated length of interrogated genome
     interrogated_genome = sum(sample_chrom_info$size)
+    autosomal_genome = sum(sample_chrom_info$size[sample_chrom_info$chr %in% 1:22])
+    
+    # Check for whole-genome duplication // PMID: 30013179
+    wgd_treshold = 0.5 # treshold 
+    frac_elevated_mcn = sum(seg$length[which(seg$mcn >= 2 & seg$chrom %in% 1:22)])/autosomal_genome
+    wgd = frac_elevated_mcn > wgd_treshold
 
-    ### Check for whole-genome duplication // Penson's logic
-    wgd_treshold = 0.6 # treshold 
-    frac_elevated_mcn = sum(as.numeric(seg[which(seg$mcn >= 2), 'length']))/interrogated_genome
-    WGD = ifelse(frac_elevated_mcn > wgd_treshold, TRUE, FALSE)
-
-    ### Regions of LOH
-    ### If duplicated genome, lcn = 1 also counts toward LOH
-    if (!WGD) {
+    # Regions of LOH
+    # If duplicated genome, lcn = 1 also counts toward LOH
+    if (!wgd) {
         seg$loh = with(seg, ifelse(lcn == 0 & mcn > 0, TRUE, FALSE))
-    } else if (WGD) {
+    } else if (wgd) {
         seg$loh = with(seg, ifelse(lcn < 2 & mcn > 1, TRUE, FALSE))
     }
     seg$loh[is.na(seg$loh)] = FALSE
     
-    ### Loop through segments, check exclusion criteria
+    # Loop through segments, check exclusion criteria
     if (nrow(seg) > 0) {
         for (i in 1:nrow(seg)) {
             if (seg$loh[i] == FALSE) { next }
@@ -517,10 +544,10 @@ calc_gloh = function(
         }
     }
 
-    ### Return values
+    # Return values
     gloh_out = data.frame(Sample = sample_name,
         gLOH = loh_length/(interrogated_genome-exclude_length),
-        WGD = WGD,
+        wgd = wgd,
         gLOH_No = length(which(seg$loh == TRUE)),
         gLOH_Median_Length = median(seg$length[which(seg$loh == TRUE)]),
         gLOH_Mean_Length = mean(seg$length[which(seg$loh == TRUE)]))
@@ -544,17 +571,48 @@ calc_gloh = function(
     }
 }
 
-#############################
-### Helper functions ########
-#############################
 
-### Negate %in%
-'%nin%' = Negate('%in%')
+# Helper functions ------------------------------------------------------------------------------------------------
 
-### Shrink segments with identical copy number that are separated for some reason
-### Logic: if different tcn ==> don't shrink
-### if any NAs in mcn/lcn ==> don't shrink
-### if identical mcn/lcn content ==> do shrink
+# Get segmentation from fit object
+get_seg = function(fit, algorithm) {
+    if (algorithm == 'em') {
+        fit$cncf$tcn = fit$cncf$tcn.em
+        fit$cncf$lcn = fit$cncf$lcn.em
+    }
+    
+    seg = fit$cncf
+    seg$length = seg$end-seg$start
+    seg[which(seg$tcn <= 1),'lcn'] = 0 # correct mcn, lcn for cases of tcn = 1 // sometimes FACETS set lcn = NA when tcn = 1, when it clearly has to be 0
+    seg$mcn = seg$tcn - seg$lcn
+    seg
+}
+
+# Sample-specific genome info
+get_sample_genome = function(seg, chrom_info) {
+    ldply(unique(seg$chrom), function(x) {
+        chr = x
+        centromere = chrom_info[which(chrom_info$chr == x), 'centromere']
+        chrstart = min(seg[which(seg$chrom == x), 'start'])
+        chrend = max(seg[which(seg$chrom == x), 'end'])
+        size = chrend-chrstart
+        plength = centromere - chrstart
+        if (plength < 0) plength = 0 # acrocentric chromosomes
+        qlength = chrend - centromere
+        c(chr = chr,
+          centromere = centromere,
+          chrstart = chrstart,
+          chrend = chrend,
+          size = size,
+          plength = plength,
+          qlength = qlength)
+    })
+}
+
+# Shrink segments with identical copy number that are separated for some reason
+# Logic: if different tcn ==> don't shrink
+# if any NAs in mcn/lcn ==> don't shrink
+# if identical mcn/lcn content ==> do shrink
 shrink_seg = function(chrom_seg) {
     if (nrow(chrom_seg) < 2) {
         chrom_seg
@@ -622,7 +680,7 @@ get_chrom_info = function(genome = 'hg19') {
  #    rownames(chrominfo) = as.character(chrominfo[,1])
  #    chrominfo = as.matrix(chrominfo)
  #    return(chrominfo)
-
+    
  	if (genome == 'hg19') {
     	return(data.frame(chr = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24),
     		size = c(249250621,243199373,198022430,191154276,180915260,171115067,159138663,146364022,141213431,135534747,135006516,133851895,115169878,107349540,102531392,90354753,81195210,78077248,59128983,63025520,48129895,51304566,155270560,59373566),
@@ -638,13 +696,9 @@ get_chrom_info = function(genome = 'hg19') {
 		}	
 }
 
-#############################
-### Plot functions ##########
-### Adopted from Facets #####
-#############################
-
-get_cumulative_chr_maploc_mod = function(mat, chrom_info){
-    ### Get chromosome position, cumulative over whole genome
+# Plot functions --------------------------------------------------------------------------------------------------
+# Get chromosome position, cumulative over whole genome
+get_cumulative_chr_maploc_mod = function(mat, chrom_info) {
     chrom_lengths = chrom_info$size
     cum_chrom_lengths = cumsum(as.numeric(chrom_lengths))
     mid = cum_chrom_lengths - (chrom_lengths/2)
@@ -657,10 +711,16 @@ get_cumulative_chr_maploc_mod = function(mat, chrom_info){
     list(mat=mat, mid=mid)
 }
 
-plot_lst = function(out, fit, lst_seg, lst, chrom_info, sample_name) {
-    ### Plot HRD-specific CN plot
-    ### Plot colors
-    col1 ="lightgrey"; col2 = "darkgrey"
+# Plot HRD-specific CN plot
+plot_lst = function(out,
+                    fit,
+                    lst_seg,
+                    lst,
+                    chrom_info,
+                    sample_name) {
+    
+    col1 ="lightgrey"
+    col2 = "darkgrey"
     
     mat = out$jointseg
     mat = subset(mat, chrom < 23)
@@ -696,10 +756,10 @@ plot_lst = function(out, fit, lst_seg, lst, chrom_info, sample_name) {
         break_pos = get_cumulative_chr_maploc_mod(break_pos, chrom_info)
     } else { break_pos = NULL }
 
-    ### Where is the allelic ratio undetermined?
+    # Where is the allelic ratio undetermined?
     cncf_na = which(is.na(cncf$lcn))
     
-    ### Plot
+    # Plot
     cnlr = ggplot(mat, environment = environment()) +
         geom_point(aes(y = cnlr, x = chr_maploc), colour = c(col1, col2)[col_rep], size = .8) +
         scale_x_continuous(breaks = mid[!is.na(names(mid))], labels = names(mid)[!is.na(names(mid))]) +
@@ -726,10 +786,15 @@ plot_lst = function(out, fit, lst_seg, lst, chrom_info, sample_name) {
     print(cnlr)
 }
 
-plot_gloh = function(out, seg, gloh_out, chrom_info, sample_name) {
-    ### Plot HRD-specific CN plot
-    ### Plot colors
-    col1 ="lightgrey"; col2 = "darkgrey"
+# Plot HRD-specific CN plot
+plot_gloh = function(out,
+                     seg,
+                     gloh_out,
+                     chrom_info,
+                     sample_name) {
+    
+    col1 ="lightgrey"
+    col2 = "darkgrey"
     
     mat = out$jointseg
     mat = subset(mat, chrom < 23)
@@ -750,13 +815,13 @@ plot_gloh = function(out, seg, gloh_out, chrom_info, sample_name) {
     my_starts = mat[starts,c('chr_maploc','cnlr_median', 'mafR')]
     my_ends = mat[ends,c('chr_maploc','cnlr_median', 'mafR')]
 
-    ### Mark centromeres
+    # Mark centromeres
     centr_pos = rbind(centromere_start = get_cumulative_chr_maploc_mod(data.frame(chrom = chrom_info$chr, maploc = chrom_info$centstart), chrom_info)$mat,
         centromere_end = get_cumulative_chr_maploc_mod(data.frame(chrom = chrom_info$chr, maploc = chrom_info$centend), chrom_info)$mat)
 
     col_rep = 1 + rep(mat$chrom - 2 * floor(mat$chrom/2))
 
-    ### Log-ratio plot
+    # Log-ratio plot
     cnlr = ggplot(mat, environment = environment()) +
         geom_point(aes(y = cnlr, x = chr_maploc), colour = c(col1, col2)[col_rep], size = .8) +
         scale_x_continuous(breaks = mid[!is.na(names(mid))], labels = names(mid)[!is.na(names(mid))]) +
@@ -776,7 +841,7 @@ plot_gloh = function(out, seg, gloh_out, chrom_info, sample_name) {
         cnlr = cnlr + geom_segment(data=cncf,aes(x=my_starts$chr_maploc, xend=my_ends$chr_maploc, y=my_starts$cnlr_median, yend=my_ends$cnlr_median), col='darkorchid3', size=1)
     }
     
-    ### Log-odds ratio plot
+    # Log-odds ratio plot
     valor = ggplot(mat, environment = environment()) +
         geom_point(aes(y=valor,x=chr_maploc), colour=c(col1,col2)[col_rep], size=.4) +
         scale_x_continuous(breaks = mid[!is.na(names(mid))], labels = names(mid)[!is.na(names(mid))]) +
@@ -799,12 +864,12 @@ plot_gloh = function(out, seg, gloh_out, chrom_info, sample_name) {
         geom_segment(data=cncf, aes(x=my_starts$chr_maploc, xend=my_ends$chr_maploc, yend=-my_ends$mafR, y=-my_starts$mafR), col='darkorchid3', size=1, lineend='butt')
     }
     
-    ### Concatenat plots
+    # Concatenate plots
     grid.arrange(cnlr, valor, ncol = 1, top = grid::textGrob(paste0(sample_name, '\ngLOH ', signif(gloh_out$gLOH, 2)*100, '% | WGD=', gloh_out$WGD), gp=grid::gpar(fontsize=18, fontfamily = 'Helvetica', font=1)))
 }
 
-### Minimalistic ggplot2 theme in black and white
-theme_bwmin = function (base_size = 12, base_family = "Helvetica") 
+# Minimalistic ggplot2 theme in black and white
+theme_bwmin = function (base_size = 12, base_family = "ArialMT") 
 {
     theme_bw(base_size = base_size, base_family = base_family) %+replace% 
         theme(panel.grid.major = element_blank(), panel.border = element_rect(fill = NA, 
