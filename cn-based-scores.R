@@ -44,7 +44,7 @@ calc_cn_stats = function(facets_rdata,
     if (wgd) {
         diploid_length = sum(seg$length[which(seg$tcn == sample_ploidy & seg$lcn == 1)])
     } else if (!wgd) {
-        diploid_length = sum(seg$length[which(seg$mcn == sample_ploidy & seg$lcn >= 1)]) 
+        diploid_length = sum(seg$length[which(seg$tcn == sample_ploidy & seg$lcn >= 1)]) 
     }
     frac_altered = (interrogated_genome-diploid_length)/interrogated_genome
     
@@ -62,8 +62,8 @@ calc_cn_stats = function(facets_rdata,
             seg_p_unaltered = sum(seg_p$length[which(seg_p$tcn == sample_ploidy & seg_p$lcn == 1)])
             seg_q_unaltered = sum(seg_q$length[which(seg_q$tcn == sample_ploidy & seg_q$lcn == 1)])
         } else if (!wgd) {
-            seg_p_unaltered = sum(seg_p$length[which(seg_p$mcn == sample_ploidy & seg_p$lcn >= 1)]) 
-            seg_q_unaltered = sum(seg_q$length[which(seg_q$mcn == sample_ploidy & seg_q$lcn >= 1)]) 
+            seg_p_unaltered = sum(seg_p$length[which(seg_p$tcn == sample_ploidy & seg_p$lcn >= 1)]) 
+            seg_q_unaltered = sum(seg_q$length[which(seg_q$tcn == sample_ploidy & seg_q$lcn >= 1)]) 
         }
         paste0(paste0(x, c('p', 'q'))[c((sample_chrom_info$plength[sample_chrom_info$chr == x]-seg_p_unaltered)/sample_chrom_info$plength[sample_chrom_info$chr == x]>.8,
                                         (sample_chrom_info$qlength[sample_chrom_info$chr == x]-seg_q_unaltered)/sample_chrom_info$qlength[sample_chrom_info$chr == x]>.8) %>% 
@@ -72,7 +72,7 @@ calc_cn_stats = function(facets_rdata,
         unlist %>% 
         discard(. %in% c('', '13p', '14p', '15p', '21p', '22p'))
 
-    # Weigthed fraction copy-number altered
+    # weighted fraction copy-number altered
     frac_altered_w = select(sample_chrom_info, chr, p = plength, q = qlength) %>% 
         gather(arm, length, -chr) %>% 
         filter(!paste0(chr, arm) %in% c('13p', '14p', '15p', '21p', '22p')) %>%
@@ -98,7 +98,7 @@ calc_cn_stats = function(facets_rdata,
         sample = sample_name,
         wgd = wgd,
         fcna = frac_altered,
-        weigthed_fcna = frac_altered_w,
+        weighted_fcna = frac_altered_w,
         aneuploidy_score = length(altered_arms),
         altered_arms = paste0(altered_arms, collapse = ',') 
     )

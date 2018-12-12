@@ -143,7 +143,8 @@ def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
         '--cval', facets_args['c'],
         '--purity_cval', facets_args['pc'],
         '--min_nhet', facets_args['m'],
-        '--purity_min_nhet', facets_args['pm']])
+        '--purity_min_nhet', facets_args['pm'],
+        '--output-dir', tumor_sample + '_' + normal_sample])
 
     print 'Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ', normal_sample 
     subprocess.call(facets_cmd, shell = True)
