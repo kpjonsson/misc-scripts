@@ -31,7 +31,7 @@ if (!is.na(args[1])) {
 # Load old and new list of samples, get the difference
 old_samples = fread_(paste0('~/log/impact_logs/sample-list-', yesterday,'.tsv')) %>% 
     clean_names
-clin = read_impact_samples()
+clin = suppressMessages(read_impact_samples())
 
 if (input_date == today()) {
     fwrite_(clin, paste0('~/log/impact_logs/sample-list-', today(),'.tsv'))
@@ -48,9 +48,9 @@ if (nrow(new_samples) == 0) {
     q()
 }
 
-maf = read_impact_maf(germline = T) %>% 
+maf = suppressMessages(read_impact_maf(germline = T)) %>% 
     filter(Tumor_Sample_Barcode %in% new_samples$sample_id)
-cnas = read_impact_cna() %>% 
+cnas = suppressMessages(read_impact_cna()) %>% 
     filter(sample_id %in% new_samples$sample_id)
 rearr = fread('~/res/dmp/mskimpact/data_SV.txt') %>% 
     clean_names %>% 
