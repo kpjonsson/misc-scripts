@@ -38,6 +38,7 @@ if (input_date == today()) {
     new_samples = clean_names(clin) %>% 
         filter(!sample_id %in% old_samples$sample_id)
 } else {
+    fwrite_(clin, paste0('~/log/impact_logs/sample-list-', today(),'.tsv'))
     new_samples = fread_(paste0('~/log/impact_logs/sample-list-', input_date,'.tsv')) %>% 
         clean_names %>% 
         filter(!sample_id %in% old_samples$sample_id)
@@ -57,7 +58,7 @@ rearr = fread('~/res/dmp/mskimpact/data_SV.txt') %>%
     filter(sample_id %in% new_samples$sample_id)
 
 # Check for new gliomas -------------------------------------------------------------------------------------------
-gliomas = filter(new_samples, cancer_type == 'Glioma') %>% 
+gliomas = filter(new_samples, tolower(cancer_type) %like% 'Glioma') %>% 
     select(patient_id, sample_id, cancer_type, cancer_type_detailed)
 
 if (nrow(gliomas) > 0) { 
