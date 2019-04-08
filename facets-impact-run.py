@@ -87,7 +87,6 @@ def run_impact_facets():
  
 def query_key(patient):
     """Grep bam file key for patient ID"""
-
     query = subprocess.Popen(['grep', patient, key], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
     output, err = query.communicate()
 
@@ -100,7 +99,6 @@ def query_key(patient):
 
 def pair_tumor_sample(tumor_sample, normal_sample, query_output):
     """Match tumor sample to normal based on platform, pick highest numbered sample"""
-    
     sample_list = {}
     for k in [s for s in query_output.split('\n') if s != '']:
         v = k.split(',')
@@ -132,7 +130,6 @@ def pair_tumor_sample(tumor_sample, normal_sample, query_output):
 
 def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
     """Construct and run cmoflow_facets command"""
-
     facets_cmd = ' '.join(
         ['cmoflow_facets',
         '--R_lib', facets_args['v'],
@@ -146,7 +143,7 @@ def run_facets(normal_sample, normal_bam, tumor_sample, tumor_bam, facets_args):
         '--purity_min_nhet', facets_args['pm'],
         '--output-dir', tumor_sample + '_' + normal_sample])
 
-    print 'Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ', normal_sample 
+    print('Running Facets:\nTumor: ' + tumor_sample + '\nNormal: ' + normal_sample)
     subprocess.call(facets_cmd, shell = True)
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ import re
 
 def rerun_facets():
     parser = argparse.ArgumentParser(description = descr, formatter_class = argparse.RawTextHelpFormatter)
-    parser.add_argument('-l', '--lib-version', help = 'Version of FACETS R pacakge', required = False, default = '0.5.6')
+    parser.add_argument('-l', '--lib-version', help = 'Version of FACETS R pacakge', required = False, default = '0.5.14')
     parser.add_argument('-f', '--counts-file', help = 'Merged SNP counts file (*.dat.gz)', required = True)
     parser.add_argument('-c', '--cval', help = 'cval parameter', required = False)
     parser.add_argument('-pc', '--purity-cval', help = 'Purity cval, to run 2-pass mode', required = False)
@@ -42,18 +42,18 @@ def rerun_facets():
         facets_args['purity_cval'] = args.purity_cval
 
     if args.purity_min_nhet is not None:
-        facets_args['purity_min_nhet'] = args.purity_min_nhet
+        facets_args['purity_min_nhet'] = args.purity_min_nhet 
 
     if args.directory is None:
         base_dir = os.path.dirname(args.counts_file)
         directory = base_dir + '/facets_' + args.lib_version + 's' + str(args.seed) + 'm' + str(args.min_nhet)
-        if facets_args.has_key('purity_min_nhet'): 
+        if 'purity_min_nhet' in facets_args: 
             directory += 'pm' + str(facets_args['purity_min_nhet'])
-        if facets_args.has_key('cval'): 
+        if 'cval' in facets_args: 
             directory += 'c' + str(facets_args['cval'])
-        if facets_args.has_key('purity_cval'): 
+        if 'purity_cval' in facets_args: 
             directory += 'pc' + str(facets_args['purity_cval'])
-        if facets_args.has_key('dipLogR'): 
+        if 'dipLogR' in facets_args: 
             directory += '_diplogr' + str(facets_args['dipLogR'])
         facets_args['directory'] = directory
     else:
@@ -79,8 +79,8 @@ def rerun_facets():
         facets_args['TAG'] = args.tag
 
     call = 'cmo_facets --lib-version ' + facets_args['lib-version'] + ' doFacets'
-    for key, value in facets_args.iteritems():
-        if key is not 'lib-version':
+    for key, value in facets_args.items():
+        if key != 'lib-version':
             call += ' --' + key + ' ' + str(value) 
     print('Running...' + '\n' + call)
 
