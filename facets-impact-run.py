@@ -65,7 +65,7 @@ def run_impact_facets():
     # If only patient ID is input
     elif bool(re.match(r'P-[0-9]{7}', tumor_sample)): 
         print('Patient ID provided, will look for all tumor samples from patient, ok [y/n]?')
-        user_in = raw_input()
+        user_in = input()
         if bool(re.match(r'(y|Y|yes)', user_in)):
             query = query_key(patient)
             all_tumors = re.findall(r'P-[0-9]{7}-T[0-9]{2}-IM[0-9]{1}', query)
@@ -89,6 +89,8 @@ def query_key(patient):
     """Grep bam file key for patient ID"""
     query = subprocess.Popen(['grep', patient, key], stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
     output, err = query.communicate()
+    err = err.decode('UTF-8')
+    output = output.decode('UTF-8')
 
     if err != '':
         sys.exit(err)
@@ -122,7 +124,8 @@ def pair_tumor_sample(tumor_sample, normal_sample, query_output):
         normals = [x for x in sample_list.keys() if sample_list[x].get('type') == 'normal' and sample_list[x].get('platform') == tumor_platform]
         if len(normals) == 0:
             sys.exit('Could not find an appropriate normal in BAM file key')
-        normal_numbers = map(int, [(v.get('number')) for (k, v) in sample_list.items() if k in normals])
+        normal_numbers = list(map(int, [(v.get('number')) for (k, v) in sample_list.items() if k in normals]))
+        # best_normal = normals[normal_numbers.index(max(normal_numbers))]
         best_normal = normals[normal_numbers.index(max(normal_numbers))]
         normal_bam = ''.join([bam_dir, sample_list[best_normal].get('name'), '.bam'])
 
